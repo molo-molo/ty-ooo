@@ -64,7 +64,7 @@ You may also join our [Discord server](https://discord.com/invite/astral-sh).
 
 Development of this project takes place in the [Ruff](https://github.com/astral-sh/ruff) repository
 at this time. Please [open pull requests](https://github.com/astral-sh/ruff/pulls) there for changes
-to anything in the `ruff` submodule (which includes all of the Rust source code).
+to anything in the vendored [`ruff/`](./VENDORED.md) directory (which includes all of the Rust source code).
 
 See the
 [contributing guide](./CONTRIBUTING.md) for more details.

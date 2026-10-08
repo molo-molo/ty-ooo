@@ -1,0 +1,549 @@
+diff --git a/crates/ty/docs/configuration.md b/crates/ty/docs/configuration.md
+index 131b159743..54d0df8a0e 100644
+--- a/crates/ty/docs/configuration.md
++++ b/crates/ty/docs/configuration.md
+@@ -43,6 +43,53 @@ Set `terminal.error-on-warning` to `false` to exit with code 0 if all diagnostic
+ 
+ ## `analysis`
+ 
++### `allow-out-of-order-references`
++
++Whether ty should tolerate references to names that are only bound later in the same
++scope or in an enclosing lexical scope.
++
++By default, ty reports `unresolved-reference` for a load whose first binding is reachable
++only after the load, mirroring Python's runtime behavior:
++
++```python
++total = offset + base  # error: Name `base` used when not defined
++base = 1
++offset = 2
++```
++
++When enabled, ty considers bindings that are reachable anywhere in the lexical scope
++chain before giving up on a load, so the example above type checks. Names that are never
++bound in a scope the load could see (such as a misspelled identifier) still produce
++`unresolved-reference`.
++
++Note that types are still inferred from the bindings that actually reach the load, so a
++forward reference can resolve to a type that differs from what Python observes at
++runtime. Defaults to `false`.
++
++**Default value**: `false`
++
++**Type**: `bool`
++
++**Example usage**:
++
++=== "pyproject.toml"
++
++    ```toml
++    [tool.ty.analysis]
++    # Do not report forward references at module scope
++    allow-out-of-order-references = true
++    ```
++
++=== "ty.toml"
++
++    ```toml
++    [analysis]
++    # Do not report forward references at module scope
++    allow-out-of-order-references = true
++    ```
++
++---
++
+ ### `allowed-unresolved-imports`
+ 
+ A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
+@@ -696,6 +743,59 @@ severity levels or disable them entirely.
+ 
+ ## `overrides.analysis`
+ 
++#### `allow-out-of-order-references`
++
++Whether ty should tolerate references to names that are only bound later in the same
++scope or in an enclosing lexical scope.
++
++By default, ty reports `unresolved-reference` for a load whose first binding is reachable
++only after the load, mirroring Python's runtime behavior:
++
++```python
++total = offset + base  # error: Name `base` used when not defined
++base = 1
++offset = 2
++```
++
++When enabled, ty considers bindings that are reachable anywhere in the lexical scope
++chain before giving up on a load, so the example above type checks. Names that are never
++bound in a scope the load could see (such as a misspelled identifier) still produce
++`unresolved-reference`.
++
++Note that types are still inferred from the bindings that actually reach the load, so a
++forward reference can resolve to a type that differs from what Python observes at
++runtime. Defaults to `false`.
++
++**Default value**: `false`
++
++**Type**: `bool`
++
++**Example usage**:
++
++=== "pyproject.toml"
++
++    ```toml
++    [[tool.ty.overrides]]
++    include = ["src"]
++
++    [tool.ty.overrides.analysis]
++    # Do not report forward references at module scope
++    allow-out-of-order-references = true
++    ```
++
++=== "ty.toml"
++
++    ```toml
++    [[overrides]]
++    include = ["src"]
++
++    [overrides.analysis]
++    # Do not report forward references at module scope
++    allow-out-of-order-references = true
++    ```
++
++---
++
+ #### `allowed-unresolved-imports`
+ 
+ A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
+diff --git a/crates/ty_ide/src/completion.rs b/crates/ty_ide/src/completion.rs
+index 151320f1c9..294fa4b1b1 100644
+--- a/crates/ty_ide/src/completion.rs
++++ b/crates/ty_ide/src/completion.rs
+@@ -3528,6 +3528,24 @@ mod tests {
+         );
+     }
+ 
++    /// Names bound later in the module are still offered, because the members of a scope do not
++    /// depend on where in the module the cursor is.
++    #[test]
++    fn symbols_bound_after_the_cursor() {
++        let builder = completion_test_builder(
++            "\
++<CURSOR>
++base = 1
++total = base + 1
++",
++        );
++        let builder = builder.skip_builtins().skip_keywords();
++        let test = builder.build();
++
++        test.contains("base");
++        test.contains("total");
++    }
++
+     #[test]
+     fn builtins() {
+         let builder = completion_test_builder(
+diff --git a/crates/ty_project/src/metadata/options.rs b/crates/ty_project/src/metadata/options.rs
+index f79bca1000..22378d6408 100644
+--- a/crates/ty_project/src/metadata/options.rs
++++ b/crates/ty_project/src/metadata/options.rs
+@@ -1678,6 +1678,36 @@ pub struct AnalysisOptions {
+     )]
+     pub respect_type_ignore_comments: Option<bool>,
+ 
++    /// Whether ty should tolerate references to names that are only bound later in the same
++    /// scope or in an enclosing lexical scope.
++    ///
++    /// By default, ty reports `unresolved-reference` for a load whose first binding is reachable
++    /// only after the load, mirroring Python's runtime behavior:
++    ///
++    /// ```python
++    /// total = offset + base  # error: Name `base` used when not defined
++    /// base = 1
++    /// offset = 2
++    /// ```
++    ///
++    /// When enabled, ty considers bindings that are reachable anywhere in the lexical scope
++    /// chain before giving up on a load, so the example above type checks. Names that are never
++    /// bound in a scope the load could see (such as a misspelled identifier) still produce
++    /// `unresolved-reference`.
++    ///
++    /// Note that types are still inferred from the bindings that actually reach the load, so a
++    /// forward reference can resolve to a type that differs from what Python observes at
++    /// runtime. Defaults to `false`.
++    #[option(
++        default = r#"false"#,
++        value_type = "bool",
++        example = r#"
++            # Do not report forward references at module scope
++            allow-out-of-order-references = true
++        "#
++    )]
++    pub allow_out_of_order_references: Option<bool>,
++
+     /// A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
+     ///
+     /// Details on supported glob patterns:
+@@ -1740,6 +1770,7 @@ impl AnalysisOptions {
+             respect_type_ignore_comments,
+             allowed_unresolved_imports,
+             replace_imports_with_any,
++            allow_out_of_order_references,
+         } = self;
+ 
+         let AnalysisSettings {
+@@ -1748,6 +1779,7 @@ impl AnalysisOptions {
+             respect_type_ignore_comments: respect_type_ignore_default,
+             allowed_unresolved_imports: allowed_unresolved_imports_default,
+             replace_imports_with_any: replace_imports_with_any_default,
++            allow_out_of_order_references: allow_out_of_order_references_default,
+         } = AnalysisSettings::default();
+ 
+         let allowed_unresolved_imports =
+@@ -1781,6 +1813,8 @@ impl AnalysisOptions {
+                 .unwrap_or(respect_type_ignore_default),
+             allowed_unresolved_imports,
+             replace_imports_with_any,
++            allow_out_of_order_references: allow_out_of_order_references
++                .unwrap_or(allow_out_of_order_references_default),
+         }
+     }
+ }
+diff --git a/crates/ty_python_core/src/place.rs b/crates/ty_python_core/src/place.rs
+index 1b89f66241..eb0e6b5d67 100644
+--- a/crates/ty_python_core/src/place.rs
++++ b/crates/ty_python_core/src/place.rs
+@@ -35,7 +35,7 @@ pub(crate) fn match_subject_place_expressions(subject: &ast::Expr) -> SmallVec<[
+ }
+ 
+ /// An expression that can be the target of a `Definition`.
+-#[derive(Eq, PartialEq, Debug, get_size2::GetSize)]
++#[derive(Clone, Eq, PartialEq, Debug, get_size2::GetSize)]
+ pub enum PlaceExpr {
+     /// A simple symbol, e.g. `x`.
+     Symbol(Symbol),
+diff --git a/crates/ty_python_semantic/resources/mdtest/diagnostics/out_of_order_references.md b/crates/ty_python_semantic/resources/mdtest/diagnostics/out_of_order_references.md
+new file mode 100644
+index 0000000000..ddb7b7614e
+--- /dev/null
++++ b/crates/ty_python_semantic/resources/mdtest/diagnostics/out_of_order_references.md
+@@ -0,0 +1,112 @@
++# Out-of-order references
++
++## Disabled by default
++
++Without `allow-out-of-order-references`, a load whose first binding is only reachable later is
++reported, mirroring Python's runtime behavior.
++
++```py
++a = 1.0 + b  # error: [unresolved-reference]
++b = 2.0
++```
++
++## Forward references enabled
++
++A name that is never bound anywhere is still reported.
++
++```toml
++[analysis]
++allow-out-of-order-references = true
++```
++
++```py
++a = 1.0 + b
++b = 2.0
++```
++
++```py
++a = 1.0 + b
++b = 2.0
++c = a + b + d  # error: [unresolved-reference]
++```
++
++## Types are taken from all reachable bindings
++
++```toml
++[analysis]
++allow-out-of-order-references = true
++```
++
++```py
++import random
++
++x = y
++if random.random() > 0.5:
++    y = 1
++
++reveal_type(x)  # revealed: Literal[1]
++```
++
++## Narrowing is unaffected
++
++```toml
++[analysis]
++allow-out-of-order-references = true
++```
++
++```py
++def f(x: int | None):
++    if x is not None:
++        reveal_type(x)  # revealed: int
++    else:
++        reveal_type(x)  # revealed: None
++```
++
++## Class body
++
++```toml
++[analysis]
++allow-out-of-order-references = true
++```
++
++```py
++class C:
++    y = b
++    b = 1
++
++reveal_type(C.y)  # revealed: int
++```
++
++## Member loads
++
++Only the symbol that owns the place expression is retried, so the receiver of a member load is
++resolved exactly as it is without the setting.
++
++```toml
++[analysis]
++allow-out-of-order-references = true
++```
++
++```py
++obj = 1
++obj.x  # error: [unresolved-attribute]
++```
++
++## Enclosing scope of a lazy scope
++
++A free variable read in a function body already resolves definitions from the whole enclosing
++scope, so the read itself does not depend on the setting.
++
++```toml
++[analysis]
++allow-out-of-order-references = true
++```
++
++```py
++def f():
++    return later
++
++later = 1
++
++reveal_type(later)  # revealed: Literal[1]
++```
+diff --git a/crates/ty_python_semantic/src/lib.rs b/crates/ty_python_semantic/src/lib.rs
+index a9ac6e1ed0..041e2518aa 100644
+--- a/crates/ty_python_semantic/src/lib.rs
++++ b/crates/ty_python_semantic/src/lib.rs
+@@ -97,6 +97,7 @@ fn register_lints(registry: &mut LintRegistryBuilder) {
+ }
+ 
+ #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
++#[expect(clippy::struct_excessive_bools)] // analysis toggles are independent settings
+ pub struct AnalysisSettings {
+     /// Whether narrowing with generic classes uses the top materialization.
+     pub strict_generic_narrowing: bool,
+@@ -116,6 +117,19 @@ pub struct AnalysisSettings {
+     pub allowed_unresolved_imports: ModuleGlobSet,
+ 
+     pub replace_imports_with_any: ModuleGlobSet,
++
++    /// Whether ty should tolerate references to names that are only bound later in a scope.
++    ///
++    /// By default, ty reports `unresolved-reference` for a name whose first binding appears
++    /// after the load, mirroring Python's runtime behavior. Enabling this option makes ty fall
++    /// back to any binding that is reachable somewhere in the enclosing lexical scope chain
++    /// before reporting the name as undefined. A name that is never bound in a place that the
++    /// load could see is still reported.
++    ///
++    /// This is intended for code that is ordered for the reader rather than for the interpreter,
++    /// such as module-level code whose definitions are interleaved with the uses that precede
++    /// them.
++    pub allow_out_of_order_references: bool,
+ }
+ 
+ impl Default for AnalysisSettings {
+@@ -126,6 +140,7 @@ impl Default for AnalysisSettings {
+             respect_type_ignore_comments: true,
+             allowed_unresolved_imports: ModuleGlobSet::empty(),
+             replace_imports_with_any: ModuleGlobSet::empty(),
++            allow_out_of_order_references: false,
+         }
+     }
+ }
+diff --git a/crates/ty_python_semantic/src/types/infer/builder.rs b/crates/ty_python_semantic/src/types/infer/builder.rs
+index ef2f946400..cca2a2685c 100644
+--- a/crates/ty_python_semantic/src/types/infer/builder.rs
++++ b/crates/ty_python_semantic/src/types/infer/builder.rs
+@@ -10421,6 +10421,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
+         expr_ref: ast::ExprRef,
+     ) -> (PlaceAndQualifiers<'db>, Vec<(FileScopeId, ConstraintKey)>) {
+         let env = self.program_environment();
++        // The resolution consumes the place expression; only symbol loads can be retried, so keep
++        // an owned copy for exactly those.
++        let place_expr_for_retry = PlaceExprRef::from(&place_expr)
++            .is_symbol()
++            .then(|| place_expr.clone());
+         let mode = if self.is_deferred() && self.in_string_annotation() {
+             PlaceLoadMode::StringAnnotation
+         } else if self.is_deferred() {
+@@ -10485,11 +10490,82 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
+             place
+         };
+ 
++        // A load that found nothing can still be satisfied by a binding that is only reachable
++        // later in the scope chain, when out-of-order references are allowed.
++        let place = if place.place.is_undefined() {
++            place_expr_for_retry
++                .and_then(|place_expr| self.infer_out_of_order_place_load(place_expr))
++                .unwrap_or(place)
++        } else {
++            place
++        };
++
+         let constraint_keys = resolution.into_constraints();
+ 
+         (place, constraint_keys)
+     }
+ 
++    /// Resolves a symbol load against every binding reachable in its lexical scope chain.
++    ///
++    /// This implements `allow-out-of-order-references`: a load that resolved to nothing in the
++    /// state that reaches it is retried as a deferred load, which ignores where in the scope the
++    /// load occurs. For example, `total` can use `base` even though `base` is only bound below.
++    ///
++    /// ```python
++    /// total = base + 1
++    /// base = 1
++    /// ```
++    ///
++    /// Returns `None` unless a deferred load finds a binding, so a name that is never bound stays
++    /// undefined and is still reported. Loads that are already deferred resolve against everything
++    /// reachable in the first place, so they need no retry.
++    ///
++    /// `place_expr` is only ever a symbol: the receiver of a member load was already resolved, and
++    /// attribute lookup does not depend on the ordering of a scope.
++    fn infer_out_of_order_place_load(
++        &self,
++        place_expr: PlaceExpr,
++    ) -> Option<PlaceAndQualifiers<'db>> {
++        if !self.settings().allow_out_of_order_references || self.is_deferred() {
++            return None;
++        }
++
++        let mut resolution = resolve_place_load(
++            self.db(),
++            self.index,
++            self.scope(),
++            place_expr,
++            PlaceLoadMode::Deferred,
++        );
++        let mut place = PlaceAndQualifiers::from(Place::Undefined);
++
++        while let Some(step) = resolution.next() {
++            match step {
++                PlaceLoadResolutionStep::Source(source) => {
++                    let narrowing_constraints = resolution.narrowing_constraints_for(&source);
++                    place = place.or_fall_back_to(self.db(), self.program_environment(), || {
++                        self.infer_place_load_source(
++                            resolution.place_expr(),
++                            source,
++                            narrowing_constraints,
++                        )
++                    });
++                    if place.place.is_definitely_bound() {
++                        break;
++                    }
++                }
++                PlaceLoadResolutionStep::MemberResolutionCondition(_) => {
++                    // Prefix tracking only affects member loads, which are not retried here.
++                }
++                PlaceLoadResolutionStep::Exhausted(_) => break,
++            }
++        }
++
++        // A deferred load that ends in the same place is the ordinary result, and the caller's
++        // own failure still decides how the load is reported.
++        (!place.place.is_undefined()).then_some(place)
++    }
++
+     fn infer_place_load_source(
+         &self,
+         place_expr: PlaceExprRef,
+diff --git a/crates/ty_server/tests/e2e/snapshots/e2e__commands__debug_command.snap b/crates/ty_server/tests/e2e/snapshots/e2e__commands__debug_command.snap
+index 636cab6743..d863bbcb8c 100644
+--- a/crates/ty_server/tests/e2e/snapshots/e2e__commands__debug_command.snap
++++ b/crates/ty_server/tests/e2e/snapshots/e2e__commands__debug_command.snap
+@@ -175,6 +175,7 @@ Settings: Settings {
+             regex_set: RegexSet([]),
+             globs: [],
+         },
++        allow_out_of_order_references: false,
+     },
+     overrides: [],
+ }
+diff --git a/crates/ty_test/src/config.rs b/crates/ty_test/src/config.rs
+index f566b304e2..4927c176c9 100644
+--- a/crates/ty_test/src/config.rs
++++ b/crates/ty_test/src/config.rs
+@@ -167,6 +167,9 @@ pub(crate) struct Analysis {
+     /// Whether narrowing with generic classes uses the top materialization.
+     pub(crate) strict_generic_narrowing: Option<bool>,
+ 
++    /// Whether a load may use bindings that are only reachable later in the scope.
++    pub(crate) allow_out_of_order_references: Option<bool>,
++
+     /// Whether equality-based checks should preserve possible subclass behavior.
+     #[serde(alias = "strict-literal-narrowing")]
+     pub(crate) strict_equality_semantics: Option<bool>,
+diff --git a/crates/ty_test/src/db.rs b/crates/ty_test/src/db.rs
+index 1808f77888..b1b529c5dc 100644
+--- a/crates/ty_test/src/db.rs
++++ b/crates/ty_test/src/db.rs
+@@ -294,6 +294,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
+     };
+ 
+     let AnalysisSettings {
++        allow_out_of_order_references: allow_out_of_order_references_default,
+         strict_generic_narrowing: strict_generic_narrowing_default,
+         strict_equality_semantics: strict_equality_semantics_default,
+         respect_type_ignore_comments: respect_type_ignore_comments_default,
+@@ -328,6 +329,9 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
+         };
+ 
+     AnalysisSettings {
++        allow_out_of_order_references: options
++            .allow_out_of_order_references
++            .unwrap_or(allow_out_of_order_references_default),
+         strict_generic_narrowing: options
+             .strict_generic_narrowing
+             .unwrap_or(strict_generic_narrowing_default),
+diff --git a/ty.schema.json b/ty.schema.json
+index 2dba932e82..17fb4e28d0 100644
+--- a/ty.schema.json
++++ b/ty.schema.json
+@@ -72,6 +72,13 @@
+     "AnalysisOptions": {
+       "type": "object",
+       "properties": {
++        "allow-out-of-order-references": {
++          "description": "Whether ty should tolerate references to names that are only bound later in the same\nscope or in an enclosing lexical scope.\n\nBy default, ty reports `unresolved-reference` for a load whose first binding is reachable\nonly after the load, mirroring Python's runtime behavior:\n\n```python\ntotal = offset + base  # error: Name `base` used when not defined\nbase = 1\noffset = 2\n```\n\nWhen enabled, ty considers bindings that are reachable anywhere in the lexical scope\nchain before giving up on a load, so the example above type checks. Names that are never\nbound in a scope the load could see (such as a misspelled identifier) still produce\n`unresolved-reference`.\n\nNote that types are still inferred from the bindings that actually reach the load, so a\nforward reference can resolve to a type that differs from what Python observes at\nruntime. Defaults to `false`.",
++          "type": [
++            "boolean",
++            "null"
++          ]
++        },
+         "allowed-unresolved-imports": {
+           "description": "A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.\n\nDetails on supported glob patterns:\n- `*` matches zero or more characters except `.`. For example, `foo.*` matches `foo.bar` but\n  not `foo.bar.baz`; `foo*` matches `foo` and `foobar` but not `foo.bar` or `barfoo`; and `*foo`\n  matches `foo` and `barfoo` but not `foo.bar` or `foobar`.\n- `**` matches any number of module components (e.g., `foo.**` matches `foo`, `foo.bar`, etc.)\n- Prefix a pattern with `!` to exclude matching modules\n\nWhen multiple patterns match, later entries take precedence.\n\nGlob patterns can be used in combinations with each other. For example, to suppress errors for\nany module where the first component contains the substring `test`, use `*test*.**`.",
+           "type": [

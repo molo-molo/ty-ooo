@@ -23,22 +23,16 @@ repository, using generation scripts that live in
 - [Command-line interface reference](https://docs.astral.sh/ty/reference/cli/), from
     [ruff/crates/ty/src/args.rs](https://github.com/astral-sh/ruff/blob/main/crates/ty/src/args.rs)
 
-The Ruff repository is included as a submodule inside this repository to allow ty's release tags to reflect
-an exact snapshot of the Ruff project. The submodule is only updated on release. To see the latest development
-code, check out the `main` branch of the Ruff repository.
+The Ruff repository is vendored into this repository under [`ruff/`](./VENDORED.md), so ty's release tags
+can reflect an exact snapshot of the Ruff project. It is updated only on release. To see the latest
+development code, check out the `main` branch of the Ruff repository.
 
 ## Getting started with the ty repository
 
-Clone the repository:
+Clone the repository — one step, the vendored `ruff/` tree comes with it:
 
 ```shell
 git clone https://github.com/astral-sh/ty.git
-```
-
-Then, ensure the submodule is initialized:
-
-```shell
-git submodule update --init --recursive
 ```
 
 ### Prerequisites
@@ -61,42 +55,51 @@ The Python package can be built with any Python build frontend (Maturin is used 
 uv build --build
 ```
 
-## Updating the Ruff commit
+## Updating the vendored Ruff tree
 
-To update the Ruff submodule to the latest commit:
+`ruff/` is a plain directory, not a submodule, so updating it means replacing files rather than moving a
+pointer. The fork's own change is kept reviewable in [`patches/ooo.patch`](./patches/ooo.patch), which is a
+diff against one upstream commit.
 
-```shell
-git -C ruff pull origin main
-```
-
-Or, to update the Ruff submodule to a specific commit:
+To update to the latest upstream commit:
 
 ```shell
-git -C ruff checkout <commit>
-```
+# 1. fetch upstream's new tree into the superproject's object store
+git remote add upstream https://github.com/astral-sh/ruff.git  # once
+git fetch upstream main
 
-To commit the changes:
+# 2. read upstream's tracked paths and write the tree in one pass
+git rm -r --cached ruff && rm -rf ruff
+mkdir ruff && git --work-tree=. archive upstream/main | tar -x -C ruff
+git add ruff
 
-```shell
-commit=$(git -C ruff rev-parse --short HEAD)
+# 3. re-apply the fork's change, then refresh the patch record
+git apply patches/ooo.patch
+python3 -c "print(open('VENDORED.md').read())"  # see Vendored.md: update the base SHA and diff listing
+git add patches/ooo.patch
+
+commit=$(git rev-parse --short upstream/main)
 git switch -c "sync/ruff-${commit}"
-git add ruff
-git commit -m "Update ruff submodule to https://github.com/astral-sh/ruff/commit/${commit}"
+git commit -m "Update vendored ruff to https://github.com/astral-sh/ruff/commit/${commit}"
 ```
 
-To restore the Ruff submodule to a clean-state, reset, then update the submodule:
+Re-applying `patches/ooo.patch` is the step that fails when upstream has moved under the patch, and it
+failing is the expected signal that the fork's change needs reconciling — not that the sync is broken.
+
+To restore the vendored tree to the committed state:
 
 ```shell
-git -C ruff reset --hard
-git submodule update
+git checkout -- ruff && git clean -fdx ruff/target
 ```
 
-To restore the Ruff submodule to the commit from `main`:
+To restore the vendored tree to exactly what `main` records:
 
 ```shell
-git -C ruff reset --hard $(git ls-tree main -- ruff | awk '{print $3}')
-git add ruff
+git checkout main -- ruff
 ```
+
+If that leaves a dirty `ruff/`, something was written into it that is neither
+tracked nor ignored — `git status --porcelain -uall ruff` will name it.
 
 ## Documentation
 
@@ -137,7 +140,7 @@ Preparation for the release is automated.
 
     The release script will:
 
-    - Update the Ruff submodule to the latest commit on `main` upstream
+    - Update the vendored Ruff tree to the latest commit on `main` upstream
     - Generate changelog entries based on pull requests here, and in Ruff
     - Bump the versions in the `pyproject.toml` and `dist-workspace.toml`
     - Update the generated reference documentation in `docs/reference`
